@@ -1,6 +1,6 @@
 ## Hi there 👋
 
-For project one, please set the file path in R studio to your own file path so your device can connect the raw data. Thank you!
+For project one, please save the raw data file to the same folder as the r studio file. Thank you!
 <!--
 **KarineKwan/KarineKwan** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
 
