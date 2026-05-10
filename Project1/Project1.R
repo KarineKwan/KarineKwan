@@ -3,10 +3,9 @@ set.seed(123)
 library("DBI") 
 library("RSQLite") 
 
-#Change this to the folder where the repository/project is located on your machine
-setwd("C:/Users/85259/Documents/project1_raw_data/") # <-- modify this path as needed
-con <- dbConnect(RSQLite::SQLite(), 
-                 "project1_raw_data.db") # connect to the DB 
+#make sure project1_raw_data.db file are in the same folder
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+con <- dbConnect(RSQLite::SQLite(), "project1_raw_data.db") # connect to the DB 
 dbListTables(con) # list database tables
 
 #check the column and data from the database tables
@@ -20,6 +19,8 @@ res_weather <- dbGetQuery(con, "SELECT * FROM weather")
 
 #Section A
 #Query to find the top three products with the highest total sales based on unit sold
+#Group by product_no to get the total_units_sold for each product
+#Desc order and limit 3 to get the top three products
 res1 <- dbGetQuery(con, "SELECT item_nbr AS product_no, SUM(units) AS total_units_sold 
                    FROM train 
                    GROUP BY product_no 
@@ -40,6 +41,7 @@ res2 <- dbGetQuery(con, "SELECT *
 #Daily sales and average temperature (tavg) for one of the top 3 products
 #return top 1 product by order by desc and LIMIT 1 (Save the temp table as top1)
 #collapse all stations mapping to a store into a single tavg per store/date by MAX
+#Reason of using MAX instead of AVG: MAX is better to handle missing data and outliers
 #Inner join top1 and daily sales
 #Left join store_weather table after getting top1 product daily sales
 #Reason: daily_sales are kept even when there is no matching weather row for the same station and date
@@ -76,6 +78,7 @@ dbDisconnect(con) # close the connection
 
 #Section B
 #Cleaning the data for res2 (joined dataset)
+library(tidyr)
 library(dplyr)
 library(stringr)
 library(lubridate)
@@ -83,6 +86,8 @@ library(hms)
 
 #Deal with special character like "T" in preciptotal and snowfall
 #Change "T" to 0
+#Reason: "T" in meteorology means "Trace", which means the amount is so small that cannot count
+#That's why instead of replacing it with mean, we replace these two variables to 0
 res2$preciptotal <- as.numeric(str_replace(res2$preciptotal, "T", "0"))
 res2$snowfall <- as.numeric(str_replace(res2$snowfall, "T", "0"))
 
@@ -108,13 +113,14 @@ res2$preciptotal[is.na(res2$preciptotal)] <- mean_preciptotal
 res2$avgspeed[is.na(res2$avgspeed)] <- mean(res2$avgspeed, na.rm = TRUE)
 
 #Replace NA with 0
+#Reason: unlike other weather variables, 
 res2$snowfall[is.na(res2$snowfall)] <- 0
 res2$heat[is.na(res2$heat)] <- 0
 
 #Use for loop to clear NA in other columns
-cols_to_fix <- c("tmax", "tmin", "dewpoint", "wetbulb", "stnpressure", "sealevel", "resultdir")
-for(col in cols_to_fix) {
-  res2[[col]][is.na(res2[[col]])] <- mean(res2[[col]], na.rm = TRUE)
+clear_NA <- c("tmax", "tmin", "dewpoint", "wetbulb", "stnpressure", "sealevel", "resultdir")
+for(x in clear_NA) {
+  res2[[x]][is.na(res2[[x]])] <- mean(res2[[x]], na.rm = TRUE)
 }
 
 
@@ -125,6 +131,9 @@ class(res2$sunrise)
 
 res2$sunset <-as_hms(res2$sunset)
 class(res2$sunset)
+
+#Drop NA to avoid unexpected results when calculating daylight hours
+res2 <- res2 %>% drop_na(sunrise, sunset)
 
 #Change "date" format from chr to date
 res2$date <-ymd(res2$date)
@@ -150,7 +159,8 @@ res2 <- res2[which(res2$is_outlier_log == FALSE), ]
 res2 <- res2[, names(res2) != "is_outlier_log"]
 
 #Add column is_bad_weather to improve the model - bad weather might lower the sales
-#See if include TS,SN,FZ,+, or GR
+#See if include TS,SN,FZ,+,GR,RA, Or FG
+#"+" has \\ in front is because "+" is a special character and now we need to treat it as normal character
 res2$is_bad_weather <- ifelse(
   grepl("TS|SN|FZ|\\+|GR|RA|FG", res2$codesum, ignore.case = TRUE), 
   1, 0
@@ -199,45 +209,45 @@ val_rmse  <- sqrt(mean((val_data$units - val_preds)^2))
 test_preds <- predict(lm_model, newdata = test_data)
 test_rmse  <- sqrt(mean((test_data$units - test_preds)^2))
 
-# Display model summary and performance metrics
+#Display model summary and performance metrics
 summary(lm_model)
 
-#R-squared is around 2.3%, which means weather variables only explain 2.3% of the variation in sales for Product 45
+#R-squared is around 7.3%, which means weather variables explain 7.3% of the variation in sales for Product 45
 #F-statistic p-value is < 2.2e-16, which means the overall model is statistically significant
 
-# tavg (Estimate = 0.01180):
-#   A 1-degree increase in average temperature is associated with a +0.01 unit change in sales
-#   However, p = 0.73149 (> 0.05), so temperature is NOT statistically significant
-
-# preciptotal (Estimate = -3.85817):
-#   A 1-unit increase in precipitation leads to a decrease of ~3.86 units in sales
-#   Highly significant (p < 0.001). Rain negatively impacts demand
-
-# heat (Estimate = 0.32577):
-#   A 1-unit increase in 'heat' (colder days) leads to a +0.33 increase in units sold
-#   Highly significant (p < 0.001). Colder weather slightly increases demand for this item
-
-# snowfall (Estimate = -4.53078):
-#   A 1-unit increase in snowfall leads to a decrease of ~4.53 units in sales
-#   Highly significant (p < 0.001). Snow has a strong negative impact on sales
-
-# avgspeed (Estimate = 0.76705):
-#   A 1-unit increase in wind speed is associated with a +0.77 increase in units sold
-#   Highly significant (p < 0.001). Higher wind speeds correlate with higher sales
-
-# is_bad_weather (Estimate = -3.01141):
-#   Presence of bad weather (1 vs 0) decreases expected sales by ~3.01 units
+# tavg (Estimate = 0.16207):
+#   A 1-degree increase in average temperature is associated with a +0.16 unit change in sales
 #   Highly significant (p < 0.001)
 
-# daylight_hours (Estimate = 0.55040):
-#   Each additional hour of daylight increases expected sales by 0.55 units
-#   Statistically significant (p = 0.02298)
+# preciptotal (Estimate = -1.44760):
+#   A 1-unit increase in precipitation leads to a decrease of ~1.45 units in sales
+#   Not statistically significant (p = 0.15381 (> 0.05))
+
+# heat (Estimate = 0.42584):
+#   A 1-unit increase in heating degree days leads to a +0.43 increase in units sold
+#   Highly significant (p < 0.001)
+
+# snowfall (Estimate = -2.69145):
+#   A 1-unit increase in snowfall leads to a decrease of ~2.69 units in sales
+#   Significant (p = 0.00142)
+
+# avgspeed (Estimate = 1.85057):
+#   A 1-unit increase in wind speed is associated with a +1.85 increase in units sold
+#   Highly significant (p < 0.001)
+
+# is_bad_weather (Estimate = -3.63960):
+#   Presence of bad weather (1 vs 0) decreases expected sales by ~3.64 units
+#   Highly significant (p < 0.001)
+
+# daylight_hours (Estimate = 0.10028):
+#   Each additional hour of daylight increases expected sales by 0.10 units
+#   Not statistically significant (p = 0.664370 (> 0.05))
 
 cat("Validation RMSE:", val_rmse, "\n")
 cat("Test RMSE:", test_rmse, "\n")
 
-#Validation RMSE: 35.28749 
-#Test RMSE: 35.41052 
+#Validation RMSE: 28.52281 
+#Test RMSE: 29.4754  
 #similar RMSE means the model is stable
 
 
@@ -248,62 +258,58 @@ library(rpart.plot)
 
 tree_model <- rpart(
   units ~ tavg + preciptotal + heat + snowfall + avgspeed + is_bad_weather + daylight_hours,
-  data = res2_prod45,method = "anova")
+  data = test_data,method = "anova")
 rpart.plot(tree_model, box.palette = "green")
 print(tree_model)
 tree_model$cptable
 
-#Split 1: daylight_hours >= 12.31
-# If daylight hours are long (summer-like), sales drop to ~13.46 units.
-# This suggests the product might be a seasonal item for cooler/darker months.
+#Split 1: avgspeed < 10.15
+# If wind speed is low (< 10.15), sales are ~9.74 units
 
-#Split 2: daylight_hours < 12.31
-# The model further splits these days. The highest sales (avg 31.60 units) 
-# occur when daylight is between 12.305 and 12.313 hours.
+#Split 2: avgspeed >= 10.15
+# If it's moderate Wind (10.15 to 14.85), sales are ~19.63 units
+# If it's strong Wind (>= 14.85), sales are ~35.27 units
 
 #Model Performance (CP Table):
-# Relative Error: 0.941 (The tree captures about 5.9% of the data's variance).
-# X-error: 0.941 (Cross-validation error is stable, indicating no overfitting).
-# The tree only used daylight_hours, suggesting it is the most dominant 
-# non-linear predictor among the weather variables provided.
+# Relative Error: 0.939 (The tree captures about 6.1% of the data's variance)
+# X-error: 0.963 (Cross-validation error is stable, indicating no overfitting)
+# The tree only used avgspeed, suggesting it is the most dominant 
 
 library(Metrics)
 
-pred_lm <- predict(lm_model, res2_prod45)
-pred_tree <- predict(tree_model, res2_prod45)
+pred_lm <- predict(lm_model, test_data)
+pred_tree <- predict(tree_model, test_data)
 
-# Metrics Table to compare
+#Metrics Table to compare
 metrics_table <- data.frame(
   Model = c("Linear Regression", "Decision Tree"),
   R2 = c(
     summary(lm_model)$r.squared, 
-    1 - sum((res2_prod45$units - pred_tree)^2) / sum((res2_prod45$units - mean(res2_prod45$units))^2)
+    1 - sum((test_data$units - pred_tree)^2) / sum((test_data$units - mean(test_data$units))^2)
   ),
   RMSE = c(
-    rmse(res2_prod45$units, pred_lm), 
-    rmse(res2_prod45$units, pred_tree)
+    rmse(test_data$units, pred_lm), 
+    rmse(test_data$units, pred_tree)
   ),
   MAE = c(
-    mae(res2_prod45$units, pred_lm), 
-    mae(res2_prod45$units, pred_tree)
+    mae(test_data$units, pred_lm), 
+    mae(test_data$units, pred_tree)
   )
 )
 
 print(metrics_table)
 
-# In terms of performance, Decision Tree outperforms the Linear Regression model
-# Reason: more than doubling the explanatory power (R² of 0.059 vs 0.023) and lower RMSE, MAE
+#In terms of performance, Linear Regression model outperforms the Decision Tree
+#Reason: more explanatory power (R² of 0.073 vs 0.061) and lower RMSE, MAE
 
-# In terms of interpretability, Decision Tree performs better than Linear Regression
-# Reason: Decision Tree offers more actionable insights
-
-# To sum up, Decision Tree performs better
+#In terms of interpretability, Decision Tree performs better than Linear Regression
+#Reason: Decision Tree offers more actionable insights
 
 
-# Section C
-# Use item_nbr 9 and 5 with linear regression model
+#Section C
+#Use item_nbr 9 and 5 with linear regression model
 
-# item_nbr = 9
+#item_nbr = 9
 res2_prod9 <- subset(res2, item_nbr == 9)
 
 res2_prod9$units <- as.numeric(as.character(res2_prod9$units))
@@ -337,27 +343,47 @@ val_rmse  <- sqrt(mean((val_data$units - val_preds)^2))
 test_preds <- predict(lm_model1, newdata = test_data)
 test_rmse  <- sqrt(mean((test_data$units - test_preds)^2))
 
-# Display model summary and performance metrics
+#Display model summary and performance metrics
 summary(lm_model1)
 
 cat("Validation RMSE:", val_rmse, "\n")
 cat("Test RMSE:", test_rmse, "\n")
 
-# Validation RMSE: 42.05522 
-# Test RMSE: 42.20798
-# similar RMSE means the model is stable
+#Validation RMSE: 36.99331
+#Test RMSE: 37.26519
+#similar RMSE means the model is stable
 
 #                Estimate Std. Error t value Pr(>|t|)    
-# (Intercept)    -3.78174    4.07704  -0.928  0.35364    
-# tavg            0.37513    0.04164   9.010  < 2e-16 ***
-# preciptotal     0.28089    1.08728   0.258  0.79615    
-# heat            0.69545    0.05608  12.401  < 2e-16 ***
-# snowfall       -3.89794    1.06110  -3.673  0.00024 ***
-# avgspeed        0.50085    0.06975   7.181 7.12e-13 ***
-# is_bad_weather -1.15240    0.62583  -1.841  0.06558 .  
-# daylight_hours -0.58307    0.28981  -2.012  0.04424 *  
+#(Intercept)     6.60177    4.34544   1.519 0.128733    
+#tavg            0.56613    0.05257  10.770  < 2e-16 ***
+#preciptotal     0.22311    1.28820   0.173 0.862504    
+#heat            0.45465    0.07510   6.054 1.46e-09 ***
+#snowfall       -3.01408    0.88489  -3.406 0.000661 ***
+#avgspeed        1.21841    0.09152  13.313  < 2e-16 ***
+#is_bad_weather  0.83703    0.83358   1.004 0.315333    
+#daylight_hours -3.00088    0.29434 -10.195  < 2e-16 ***
 
-# item_nbr = 5
+
+#Decision Tree (item_nbr = 9)
+tree_model <- rpart(
+  units ~ tavg + preciptotal + heat + snowfall + avgspeed + is_bad_weather + daylight_hours,
+  data = test_data,method = "anova")
+rpart.plot(tree_model, box.palette = "green")
+print(tree_model)
+tree_model$cptable
+
+#1) root 3491 5017153.000 20.3377300  
+# 2) daylight_hours>=14.625 157    3116.025  0.3566879 *
+# 3) daylight_hours< 14.625 3334 4948404.000 21.2786400  
+#  6) avgspeed< 4.55 453  434007.200 10.6335500 *
+#  7) avgspeed>=4.55 2881 4454992.000 22.9524500  
+#   14) daylight_hours< 9.691667 85       0.000  0.0000000 *
+#   15) daylight_hours>=9.691667 2796 4408852.000 23.6502100  
+#    30) daylight_hours>=9.941667 2675 3829974.000 22.7091600 *
+#    31) daylight_hours< 9.941667 121  524138.000 44.4545500 *
+
+
+#item_nbr = 5
 res2_prod5 <- subset(res2, item_nbr == 5)
 
 res2_prod5$units <- as.numeric(as.character(res2_prod5$units))
@@ -391,47 +417,42 @@ val_rmse  <- sqrt(mean((val_data$units - val_preds)^2))
 test_preds <- predict(lm_model2, newdata = test_data)
 test_rmse  <- sqrt(mean((test_data$units - test_preds)^2))
 
-# Display model summary and performance metrics
+#Display model summary and performance metrics
 summary(lm_model2)
 
 cat("Validation RMSE:", val_rmse, "\n")
 cat("Test RMSE:", test_rmse, "\n")
 
-# Validation RMSE: 32.52847 
-# Test RMSE: 32.27697 
-# similar RMSE means the model is stable
+#Validation RMSE: 31.3886 
+#Test RMSE: 30.54011 
+#similar RMSE means the model is stable
 
-#                 Estimate Std. Error t value Pr(>|t|)    
-# (Intercept)     4.92186    3.11247   1.581   0.1138    
-# tavg            0.34653    0.03172  10.925  < 2e-16 ***
-# preciptotal    -1.55672    0.79227  -1.965   0.0494 *  
-# heat            0.40218    0.04279   9.399  < 2e-16 ***
-# snowfall       -3.60819    0.89533  -4.030 5.59e-05 ***
-# avgspeed        0.71113    0.05351  13.290  < 2e-16 ***
-# is_bad_weather -0.72750    0.47394  -1.535   0.1248    
-# daylight_hours -1.21475    0.22127  -5.490 4.06e-08 ***
+#                Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)    -0.61384    3.72253  -0.165   0.8690    
+#tavg            0.54078    0.04501  12.014  < 2e-16 ***
+#preciptotal    -0.87818    1.14267  -0.769   0.4422    
+#heat            0.54394    0.06417   8.477  < 2e-16 ***
+#snowfall       -1.66970    1.00260  -1.665   0.0959 .  
+#avgspeed        0.16081    0.07739   2.078   0.0377 *  
+#is_bad_weather -1.54843    0.71448  -2.167   0.0302 *  
+#daylight_hours -1.81410    0.25149  -7.214 5.83e-13 ***
 
-# Decision Tree (item_nbr = 9)
+
+
+#Decision Tree (item_nbr = 5)
 tree_model <- rpart(
   units ~ tavg + preciptotal + heat + snowfall + avgspeed + is_bad_weather + daylight_hours,
-  data = res2_prod9,method = "anova")
+  data = test_data,method = "anova")
 rpart.plot(tree_model, box.palette = "green")
 print(tree_model)
 tree_model$cptable
-#No split
 
-# item_nbr = 5
-tree_model <- rpart(
-  units ~ tavg + preciptotal + heat + snowfall + avgspeed + is_bad_weather + daylight_hours,
-  data = res2_prod5,method = "anova")
-rpart.plot(tree_model, box.palette = "green")
-print(tree_model)
-tree_model$cptable
-#No split
+#1) root 3491 3325373 15.81810  
+# 2) daylight_hours>=14.64167 151       0  0.00000 *
+# 3) daylight_hours< 14.64167 3340 3285883 16.53323 *
 
 
-
-# Scatter plot (Temperature VS Sales)
+#Scatter plot (Temperature VS Sales)
 library(ggplot2)
 ggplot(res2_prod45, aes(x = tavg, y = units)) +
   geom_jitter(alpha = 0.3, color = "steelblue") + 
@@ -441,7 +462,7 @@ ggplot(res2_prod45, aes(x = tavg, y = units)) +
        y = "Quantity Sold (units)") +
   theme_minimal()
 
-# item_nbr = 9
+#item_nbr = 9
 ggplot(res2_prod9, aes(x = tavg, y = units)) +
   geom_jitter(alpha = 0.3, color = "steelblue") + 
   geom_smooth(method = "lm", color = "red") +    
@@ -450,7 +471,7 @@ ggplot(res2_prod9, aes(x = tavg, y = units)) +
        y = "Quantity Sold (units)") +
   theme_minimal()
 
-# item_nbr = 5
+#item_nbr = 5
 ggplot(res2_prod5, aes(x = tavg, y = units)) +
   geom_jitter(alpha = 0.3, color = "steelblue") + 
   geom_smooth(method = "lm", color = "red") +    
@@ -460,7 +481,7 @@ ggplot(res2_prod5, aes(x = tavg, y = units)) +
   theme_minimal()
 
 
-# Weather Events Impact
+#Weather Events Impact
 res2_prod45$is_bad_weather <- as.factor(res2_prod45$is_bad_weather)
 
 ggplot(res2_prod45, aes(x = is_bad_weather, y = units, fill = is_bad_weather)) +
@@ -472,7 +493,7 @@ ggplot(res2_prod45, aes(x = is_bad_weather, y = units, fill = is_bad_weather)) +
        fill = "Weather Category") +
   theme_light()
 
-# item_nbr = 9
+#item_nbr = 9
 res2_prod9$is_bad_weather <- as.factor(res2_prod9$is_bad_weather)
 
 ggplot(res2_prod9, aes(x = is_bad_weather, y = units, fill = is_bad_weather)) +
@@ -484,7 +505,7 @@ ggplot(res2_prod9, aes(x = is_bad_weather, y = units, fill = is_bad_weather)) +
        fill = "Weather Category") +
   theme_light()
 
-# item_nbr = 5
+#item_nbr = 5
 res2_prod5$is_bad_weather <- as.factor(res2_prod5$is_bad_weather)
 
 ggplot(res2_prod5, aes(x = is_bad_weather, y = units, fill = is_bad_weather)) +
@@ -496,7 +517,7 @@ ggplot(res2_prod5, aes(x = is_bad_weather, y = units, fill = is_bad_weather)) +
        fill = "Weather Category") +
   theme_light()
 
-# Sales Over Time
+#Sales Over Time
 quarterly_sales <- res2_prod45 %>%
   mutate(quarter = paste0(year(date), "-Q", quarter(date))) %>% 
   group_by(quarter) %>%
@@ -512,7 +533,7 @@ ggplot(quarterly_sales, aes(x = quarter, y = total_units, fill = quarter)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Avoid the text to overlap
 
-# item_nbr = 9
+#item_nbr = 9
 quarterly_sales <- res2_prod9 %>%
   mutate(quarter = paste0(year(date), "-Q", quarter(date))) %>% 
   group_by(quarter) %>%
@@ -528,7 +549,7 @@ ggplot(quarterly_sales, aes(x = quarter, y = total_units, fill = quarter)) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Avoid the text to overlap
 
-# item_nbr = 5
+#item_nbr = 5
 quarterly_sales <- res2_prod5 %>%
   mutate(quarter = paste0(year(date), "-Q", quarter(date))) %>% 
   group_by(quarter) %>%
