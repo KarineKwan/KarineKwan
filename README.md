@@ -1,6 +1,9 @@
 ## Hi there 👋
 
-For project one, please save the raw data file to the same folder as the r studio file. Thank you!
+For project one, the raw data is in https://relational-data.org/dataset/Walmart. Please save the raw data file to the same folder as the r studio file. 
+
+For project two, you can find the raw data in https://archive.ics.uci.edu/dataset/413/dynamic+features+of+virusshare+executables. Thank you!
+
 <!--
 **KarineKwan/KarineKwan** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
 
