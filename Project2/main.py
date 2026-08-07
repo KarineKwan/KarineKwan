@@ -66,11 +66,7 @@ print(final_df.head())
 
 # 2. Data Cleaning and Feature Creation
 
-# Fill na except the first column (risk score) with 0
-# Reason for features #368-482 also fill na with 0 although the data type is binary is because signature_features
-# is the alarm system in Cuckoo Sandbox. If the raw data doesn't record anything, it should fill as 0
-# iloc[:, 1:] means all rows and all columns except the first column (risk score)
-final_df.iloc[:, 1:] = final_df.iloc[:, 1:].fillna(0)
+# Not filling na with 0 because HistGradientBoostingClassifier has native NaN support
 
 # drop na if there is na on the first column
 final_df = final_df.dropna(subset=['risk_score'])
@@ -82,11 +78,6 @@ final_df.columns = final_df.columns.astype(str).str.strip()
 counts = final_df.columns.to_series().groupby(level=0).cumcount()
 is_duplicate = final_df.columns.duplicated()
 new_columns = np.where(is_duplicate, final_df.columns.astype(str) + "_" + counts.astype(str), final_df.columns)
-
-# If there is some columns has only zeros, drop the column
-# loc[:, ...] to filter through columns
-# axis=0 means counting each column from up to down
-final_df = final_df.loc[:, (final_df.sum(axis=0) != 0) | (final_df.columns == "risk_score")]
 
 # Check variable types and full summary
 final_df.info()
@@ -112,6 +103,9 @@ X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.30, random
 
 # Equally split the remaining 30% (each gets 15% of the total) into validation and test sets
 X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.50, random_state=42, stratify=y_temp)
+
+# Save the column names for package model in the end
+trained_feature_names = X_train.columns.tolist()
 
 # Avoid any column name error when running the model
 X_train_np = X_train.values
@@ -209,7 +203,16 @@ plot_output_path = rawdata_folder / "feature_importance_plot.png"
 plt.savefig(plot_output_path, dpi=300)
 
 # Step6: Save the model to a pickle file
-export_pipeline = {"final_model": gbt_model, "optimal_threshold": best_t}
+
+# A small sample of data for the demo script
+demo_sample_X = X_test.head(5)
+demo_sample_y = y_test.head(5)
+
+export_pipeline = {"final_model": gbt_model,
+                   "optimal_threshold": best_t,
+                   "feature_names": trained_feature_names,
+                   "demo_x": demo_sample_X,
+                   "demo_y": demo_sample_y}
 
 model_output_path = rawdata_folder / "final_model.pkl"
 with open(model_output_path, "wb") as f:
