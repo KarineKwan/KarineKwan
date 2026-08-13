@@ -34,12 +34,14 @@ dfs_to_merge = []
 # X is the risk score and y is the features
 # Data dictionary shows that there are 483 features, so n_features=483
 # insert "risk_score" in the first row first column
+# reason to replace 0 to nan: the model can be trained with nan values
 with zipfile.ZipFile(rawdata[0], "r") as files:
     for file_name in files.namelist():
         data = files.open(file_name).read()
         bytes_stream = io.BytesIO(data)
         X, y = load_svmlight_file(bytes_stream, n_features=483)
         df_temp = pd.DataFrame(X.toarray())
+        df_temp = df_temp.replace(0.0, np.nan)
         df_temp.insert(0, "risk_score", y)
         dfs_to_merge.append(df_temp)
 
@@ -67,6 +69,9 @@ print(final_df.head())
 # 2. Data Cleaning and Feature Creation
 
 # Not filling na with 0 because HistGradientBoostingClassifier has native NaN support
+
+# Remove the columns that all values are nan as it carried no information to the model
+final_df = final_df.dropna(axis=1, how='all')
 
 # drop na if there is na on the first column
 final_df = final_df.dropna(subset=['risk_score'])
@@ -213,6 +218,9 @@ export_pipeline = {"final_model": gbt_model,
                    "feature_names": trained_feature_names,
                    "demo_x": demo_sample_X,
                    "demo_y": demo_sample_y}
+
+# Input templates for users
+demo_sample_X.to_csv(rawdata_folder / "demo_inputs.csv", index=False)
 
 model_output_path = rawdata_folder / "final_model.pkl"
 with open(model_output_path, "wb") as f:
