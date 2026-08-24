@@ -47,10 +47,12 @@ with zipfile.ZipFile(rawdata[0], "r") as files:
 
 df = pd.concat(dfs_to_merge, axis=0, ignore_index=True)
 
-# Load mapping file ***(Please only save one csv file in the folder)***
-mapfile = list(rawdata_folder.glob("*.csv"))
+# Load mapping file **please only save demo_inputs.csv and feature_name_to_number_mapping.csv in the folder
+csv_files = list(rawdata_folder.glob("*.csv"))
+mapfile = [f for f in csv_files if f.name != "demo_inputs.csv"]
+
 if not mapfile:
-    raise FileNotFoundError(f"There is not a csv file in {rawdata_folder}.")
+    raise FileNotFoundError(f"There is not feature mapping CSV file in {rawdata_folder}.")
 df_map = pd.read_csv(mapfile[0])
 
 # int(row["feature_number"]): row["feature_name"] is making the key-value relationship for the dictionary
@@ -210,17 +212,15 @@ plt.savefig(plot_output_path, dpi=300)
 # Step6: Save the model to a pickle file
 
 # A small sample of data for the demo script
-demo_sample_X = X_test.head(5)
-demo_sample_y = y_test.head(5)
+demo_export_df = X_val.head(5).copy()
+# DEMO_Y_RESULT is for checking the accuracy in Demo_Script.py
+# Users can choose to delete the column later or keep it without affecting the result
+demo_export_df.insert(0, "DEMO_Y_RESULT", y_val.head(5).values)
+demo_export_df.to_csv(rawdata_folder / "demo_inputs.csv", index=False)
 
 export_pipeline = {"final_model": gbt_model,
                    "optimal_threshold": best_t,
-                   "feature_names": trained_feature_names,
-                   "demo_x": demo_sample_X,
-                   "demo_y": demo_sample_y}
-
-# Input templates for users
-demo_sample_X.to_csv(rawdata_folder / "demo_inputs.csv", index=False)
+                   "feature_names": trained_feature_names}
 
 model_output_path = rawdata_folder / "final_model.pkl"
 with open(model_output_path, "wb") as f:
